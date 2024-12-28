@@ -1,0 +1,25 @@
+# Build directories
+build/
+dist/
+*.spec
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Cache directory
+cache/
+
+# Environment
+venv/
+.env
+.venv
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# Windows
+Thumbs.db
+desktop.ini
