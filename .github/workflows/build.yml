@@ -24,15 +24,14 @@ jobs:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: "pip"
 
-      - name: Install PyTorch
-        run: |
-          pip3 install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
-
-      - name: Install Other Dependencies
+      - name: Install Dependencies
         run: |
           python -m pip install --upgrade pip wheel setuptools
-          pip install --no-cache-dir -r requirements.txt
-          pip install --no-cache-dir pyinstaller
+          # Install PyTorch first with specific version
+          pip install torch==2.0.1+cu118 torchvision==0.15.2+cu118 torchaudio==2.0.2 --extra-index-url https://download.pytorch.org/whl/cu118
+          # Install other dependencies
+          pip install -r requirements.txt
+          pip install pyinstaller==6.1.0 pyinstaller-hooks-contrib==2024.0
 
       - name: Verify Dependencies
         shell: pwsh
@@ -78,77 +77,70 @@ jobs:
       - name: Build Executable
         shell: pwsh
         run: |
-          # Create runtime dependency collector
-          mkdir tools -ErrorAction SilentlyContinue
+          # Create the spec file
           @"
-          import os
-          import shutil
+          # -*- mode: python ; coding: utf-8 -*-
           import sys
-          from pathlib import Path
+          from PyInstaller.utils.hooks import collect_dynamic_libs
 
-          def collect_runtime_deps():
-              deps_dir = Path('runtime_deps')
-              deps_dir.mkdir(exist_ok=True)
-              
-              # Essential DLLs
-              system_dlls = [
-                  'msvcp140.dll',
-                  'vcruntime140.dll',
-                  'vcruntime140_1.dll',
-                  'concrt140.dll',
-              ]
-              
-              # Copy system DLLs
-              for dll in system_dlls:
-                  src = Path(r'C:\Windows\System32') / dll
-                  if src.exists():
-                      shutil.copy2(src, deps_dir)
-              
-              # Get CUDA DLLs from torch
-              import torch
-              torch_path = Path(torch.__file__).parent
-              cuda_dlls = torch_path.glob('lib/*.dll')
-              for dll in cuda_dlls:
-                  shutil.copy2(dll, deps_dir)
-              
-              # Get OpenCV DLLs
-              import cv2
-              cv2_path = Path(cv2.__file__).parent
-              cv2_dlls = cv2_path.glob('*.dll')
-              for dll in cv2_dlls:
-                  shutil.copy2(dll, deps_dir)
-              
-              return deps_dir
+          block_cipher = None
+          binaries = []
 
-          if __name__ == '__main__': 
-              deps = collect_runtime_deps()
-              print(f'Collected dependencies in: {deps}')
-          "@ | Set-Content "tools/collect_deps.py"
+          # Collect CUDA DLLs
+          cuda_dlls = collect_dynamic_libs('torch')
+          binaries.extend(cuda_dlls)
 
-          # Collect runtime dependencies
-          python tools/collect_deps.py
-
-          # Build with collected dependencies
-          $PyInstallerArgs = @(
-            '--onefile',
-            '--windowed',
-            '--clean',
-            '--name', 'VideoScanner',
-            '--add-data', 'runtime_deps/*;.',
-            '--hidden-import', 'torch',
-            '--hidden-import', 'numpy',
-            '--hidden-import', 'cv2',
-            '--hidden-import', 'moviepy.editor',
-            '--hidden-import', 'colorama',
-            '--paths', (Get-Location).Path,
-            '--exclude-module', 'matplotlib',
-            '--exclude-module', 'pandas',
-            '--exclude-module', 'tkinter',
-            'main.py'
+          a = Analysis(
+              ['main.py'],
+              pathex=[r'${PWD}'.replace('\\', '\\\\')],
+              binaries=binaries,
+              datas=[],
+              hiddenimports=[
+                  'torch',
+                  'torch.cuda',
+                  'moviepy.editor',
+                  'numpy',
+                  'cv2',
+                  'colorama',
+                  'PIL',
+                  'tqdm'
+              ],
+              hookspath=[],
+              hooksconfig={},
+              runtime_hooks=[],
+              excludes=['matplotlib', 'pandas', 'tkinter'],
+              win_no_prefer_redirects=False,
+              win_private_assemblies=False,
+              cipher=block_cipher,
+              noarchive=False,
           )
 
-          Write-Host "Building standalone executable..."
-          & python -m PyInstaller $PyInstallerArgs
+          pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
+
+          exe = EXE(
+              pyz,
+              a.scripts,
+              a.binaries,
+              a.zipfiles,
+              a.datas,
+              [],
+              name='VideoScanner',
+              debug=False,
+              bootloader_ignore_signals=False,
+              strip=False,
+              upx=True,
+              upx_exclude=[],
+              runtime_tmpdir=None,
+              console=False,
+              disable_windowed_traceback=False,
+              target_arch=None,
+              codesign_identity=None,
+              entitlements_file=None,
+          )
+          "@ | Set-Content "VideoScanner.spec"
+
+          # Run PyInstaller with spec file
+          pyinstaller VideoScanner.spec
 
       - name: Create Release Package
         shell: pwsh
@@ -156,19 +148,22 @@ jobs:
           $packageDir = "VideoScanner-${{ steps.version_info.outputs.version }}"
           New-Item -ItemType Directory -Path $packageDir
 
-          # Copy executable and essential files
+          # Copy files
           Copy-Item "dist\VideoScanner.exe", "README.md" -Destination $packageDir
 
-          # Create minimal launcher
+          # Copy Visual C++ Runtime
+          Copy-Item "C:\Windows\System32\msvcp140.dll", "C:\Windows\System32\vcruntime140.dll" -Destination $packageDir
+
+          # Create launcher
           @"
           @echo off
-          echo Video Scanner - Running...
+          echo Starting Video Scanner...
           start /wait VideoScanner.exe %*
           if errorlevel 1 (
-              echo Error occurred. Press any key...
+              echo Error occurred! Press any key...
               pause >nul
           )
-          "@ | Set-Content "$packageDir\Launch_VideoScanner.bat"
+          "@ | Set-Content "$packageDir\Run_VideoScanner.bat"
 
           # Create ZIP
           Compress-Archive -Path $packageDir\* -DestinationPath "$packageDir.zip" -Force
