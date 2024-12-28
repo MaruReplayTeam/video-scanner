@@ -2,134 +2,129 @@ name: Build and Release
 
 on:
   push:
-    tags:
-      - "v*" # Trigger on version tags
-    branches:
-      - master # Trigger on main branch updates
-  workflow_dispatch: # Allow manual trigger
+    tags: ["v*"]
+    branches: [master]
+  workflow_dispatch:
+
+env:
+  CUDA_VERSION: "11.8.0"
+  PYTHON_VERSION: "3.10"
+  BUILD_TYPE: "Release"
 
 jobs:
   build:
     runs-on: windows-latest
 
-    steps:
-      - uses: actions/checkout@v3
+    env:
+      CUDA_PATH: 'C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v11.8'
 
-      - name: Set up Python
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+
+      - name: Setup Python
         uses: actions/setup-python@v4
         with:
-          python-version: "3.10"
+          python-version: ${{ env.PYTHON_VERSION }}
           cache: "pip"
+          cache-dependency-path: "requirements.txt"
 
-      # Add CUDA Toolkit installation
-      - name: Install CUDA
-        shell: powershell
-        run: |
-          $cuda_url = "https://developer.download.nvidia.com/compute/cuda/11.8.0/local_installers/cuda_11.8.0_522.06_windows.exe"
-          $cuda_installer = "cuda_installer.exe"
-          Invoke-WebRequest -Uri $cuda_url -OutFile $cuda_installer
-          Start-Process -FilePath $cuda_installer -ArgumentList "/s","/n" -Wait
-          Remove-Item $cuda_installer
-          $env:PATH = "$env:PATH;C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v11.8\bin"
-          echo "CUDA_PATH=C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v11.8" >> $env:GITHUB_ENV
+      - name: Cache CUDA and VC++ Runtime
+        id: cache-deps
+        uses: actions/cache@v3
+        with:
+          path: |
+            deps
+            C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v11.8\bin
+          key: ${{ runner.os }}-cuda-${{ env.CUDA_VERSION }}-vc-2022
 
-      # Install Visual C++ Redistributable
-      - name: Install VC++ Redistributable
-        shell: powershell
-        run: |
-          $vcredist_url = "https://aka.ms/vs/17/release/vc_redist.x64.exe"
-          $vcredist_installer = "vc_redist.exe"
-          Invoke-WebRequest -Uri $vcredist_url -OutFile $vcredist_installer
-          Start-Process -FilePath $vcredist_installer -ArgumentList "/install","/quiet","/norestart" -Wait
-          Remove-Item $vcredist_installer
-
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
-          pip install pyinstaller
-
-      - name: Get version
-        id: get_version
-        run: |
-          $version = if ($env:GITHUB_REF -match '^refs/tags/v') { 
-            $env:GITHUB_REF -replace '^refs/tags/v', '' 
-          } else { 
-            "dev-$($env:GITHUB_SHA.Substring(0, 7))" 
-          }
-          echo "version=$version" >> $env:GITHUB_OUTPUT
+      - name: Install CUDA Toolkit
+        if: steps.cache-deps.outputs.cache-hit != 'true'
         shell: pwsh
-
-      # Collect all necessary DLLs and dependencies
-      - name: Prepare dependencies
-        shell: powershell
         run: |
-          # Create deps directory
-          mkdir deps
-          # Copy CUDA DLLs
-          Copy-Item "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v11.8\bin\*.dll" deps/
-          # Copy VC++ Runtime DLLs
-          Copy-Item "C:\Windows\System32\msvcp140.dll" deps/
-          Copy-Item "C:\Windows\System32\vcruntime140.dll" deps/
-          Copy-Item "C:\Windows\System32\vcruntime140_1.dll" deps/
+          $ProgressPreference = 'SilentlyContinue'
+          Invoke-WebRequest -Uri "https://developer.download.nvidia.com/compute/cuda/${{ env.CUDA_VERSION }}/local_installers/cuda_${{ env.CUDA_VERSION }}_522.06_windows.exe" -OutFile "cuda_installer.exe"
+          Start-Process -FilePath "cuda_installer.exe" -ArgumentList "/s","/n" -Wait -NoNewWindow
+          Remove-Item "cuda_installer.exe"
 
-      - name: Build executable
+      - name: Install Dependencies
         run: |
-          # Modify build_app.py to include all DLLs
-          python build_app.py
-        env:
-          VERSION: ${{ steps.get_version.outputs.version }}
+          python -m pip install --upgrade pip wheel setuptools
+          pip install -r requirements.txt --no-cache-dir
+          pip install pyinstaller --no-cache-dir
 
-      # Create distribution package
-      - name: Create distribution package
-        shell: powershell
+      - name: Setup Build Version
+        id: version
+        shell: pwsh
         run: |
-          mkdir release
-          Copy-Item "dist\VideoScanner.exe" release/
-          Copy-Item "deps\*" release/
-          Copy-Item "README.md" release/
-          # Create batch launcher
-          Set-Content -Path "release\Launch_VideoScanner.bat" -Value @"
+          if ($env:GITHUB_REF -match '^refs/tags/v') {
+            $ver = $env:GITHUB_REF -replace '^refs/tags/v', ''
+          } else {
+            $ver = "dev-$(git rev-parse --short HEAD)"
+          }
+          "version=$ver" >> $env:GITHUB_OUTPUT
+          "VERSION=$ver" >> $env:GITHUB_ENV
+
+      - name: Prepare Dependencies Directory
+        run: |
+          mkdir deps -ErrorAction SilentlyContinue
+          robocopy "${{ env.CUDA_PATH }}\bin" "deps" "cusolver64_*.dll" "cudart64_*.dll" "cufft64_*.dll" /NFL /NDL /NJH /NJS /nc /ns /np
+          robocopy "C:\Windows\System32" "deps" "msvcp140.dll" "vcruntime140.dll" "vcruntime140_1.dll" /NFL /NDL /NJH /NJS /nc /ns /np
+        continue-on-error: true
+
+      - name: Build Executable
+        run: python build_app.py
+
+      - name: Package Release
+        shell: pwsh
+        run: |
+          $packageDir = "VideoScanner-${{ steps.version.outputs.version }}"
+          New-Item -ItemType Directory -Path $packageDir
+
+          # Copy files
+          Copy-Item "dist\VideoScanner.exe", "README.md", "deps\*" -Destination $packageDir
+
+          # Create launcher
+          @"
           @echo off
           echo Starting Video Scanner...
           start VideoScanner.exe %*
-          "@
-          # Create zip archive
-          Compress-Archive -Path release\* -DestinationPath VideoScanner-${{ steps.get_version.outputs.version }}.zip
+          "@ | Set-Content "$packageDir\Launch_VideoScanner.bat"
 
-      - name: Create Release
-        id: create_release
+          # Create ZIP
+          Compress-Archive -Path $packageDir\* -DestinationPath "$packageDir.zip" -Force
+
+      - name: Create GitHub Release
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v1
         with:
-          name: Release ${{ steps.get_version.outputs.version }}
-          draft: false
-          prerelease: false
-          files: |
-            VideoScanner-${{ steps.get_version.outputs.version }}.zip
+          name: Release ${{ steps.version.outputs.version }}
+          files: VideoScanner-${{ steps.version.outputs.version }}.zip
           body: |
-            Video Scanner Release ${{ steps.get_version.outputs.version }}
+            Video Scanner ${{ steps.version.outputs.version }}
 
-            ## What's Changed
-            * Automatic build from tag ${{ github.ref_name }}
-            * All dependencies included - no additional installation required
-            * CUDA 11.8 runtime included
-            * VC++ Runtime included
+            ### 🚀 Features
+            * Standalone executable - no installation needed
+            * CUDA ${{ env.CUDA_VERSION }} support included
+            * Visual C++ Runtime included
 
-            ## How to Install
-            1. Download and extract VideoScanner-${{ steps.get_version.outputs.version }}.zip
-            2. Run Launch_VideoScanner.bat
-            3. Drag and drop video files onto the application
+            ### 📥 Installation
+            1. Download and extract the ZIP
+            2. Run `Launch_VideoScanner.bat`
+            3. Drag & drop video files to analyze
 
-            ## System Requirements
-            * Windows 10 64-bit or later
-            * NVIDIA GPU (optional, for GPU acceleration)
+            ### 💻 Requirements
+            * Windows 10/11 64-bit
+            * NVIDIA GPU (optional)
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Upload artifact
+      - name: Upload Build Artifact
         if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
         uses: actions/upload-artifact@v3
         with:
-          name: VideoScanner-${{ steps.get_version.outputs.version }}
-          path: VideoScanner-${{ steps.get_version.outputs.version }}.zip
+          name: VideoScanner-${{ steps.version.outputs.version }}
+          path: VideoScanner-${{ steps.version.outputs.version }}.zip
+          retention-days: 7
