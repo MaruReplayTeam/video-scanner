@@ -5,7 +5,7 @@ on:
     tags:
       - "v*" # Trigger on version tags
     branches:
-      - main # Trigger on main branch updates
+      - master # Trigger on main branch updates
   workflow_dispatch: # Allow manual trigger
 
 jobs:
