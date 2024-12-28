@@ -30,16 +30,39 @@ jobs:
           pip install -r requirements.txt
           pip install pyinstaller
 
-      - name: Get Version
-        id: version
+      - name: Get Version Info
+        id: version_info
         shell: pwsh
         run: |
+          # Get version number
           $ver = if ($env:GITHUB_REF -match '^refs/tags/v') {
             $env:GITHUB_REF -replace '^refs/tags/v', ''
           } else {
             "dev-$(git rev-parse --short HEAD)"
           }
           echo "version=$ver" >> $env:GITHUB_OUTPUT
+
+          # Get tag message if available
+          if ($env:GITHUB_REF -match '^refs/tags/') {
+            $tag_msg = git tag -l --format='%(contents)' "$($env:GITHUB_REF -replace '^refs/tags/', '')"
+            echo "tag_message=$tag_msg" >> $env:GITHUB_OUTPUT
+          }
+
+          # Get changes since last release
+          $changes = if ($env:GITHUB_REF -match '^refs/tags/') {
+            $prev_tag = git describe --abbrev=0 --tags HEAD^ 2>$null
+            if ($prev_tag) {
+              git log --pretty=format:"* %s" "$prev_tag..HEAD"
+            } else {
+              git log --pretty=format:"* %s" HEAD
+            }
+          } else {
+            "Development build"
+          }
+          $changes = $changes -join "`n"
+          echo "changes<<EOF" >> $env:GITHUB_OUTPUT
+          echo "$changes" >> $env:GITHUB_OUTPUT
+          echo "EOF" >> $env:GITHUB_OUTPUT
 
       - name: Build Executable
         run: |
@@ -48,7 +71,7 @@ jobs:
       - name: Create Release Package
         shell: pwsh
         run: |
-          $packageDir = "VideoScanner-${{ steps.version.outputs.version }}"
+          $packageDir = "VideoScanner-${{ steps.version_info.outputs.version }}"
           New-Item -ItemType Directory -Path $packageDir
           Copy-Item "dist\VideoScanner.exe", "README.md" -Destination $packageDir
           Set-Content -Path "$packageDir\Launch_VideoScanner.bat" -Value "@echo off`nstart VideoScanner.exe %*"
@@ -58,22 +81,30 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v1
         with:
-          name: Release ${{ steps.version.outputs.version }}
-          files: VideoScanner-${{ steps.version.outputs.version }}.zip
+          name: Release ${{ steps.version_info.outputs.version }}
+          files: VideoScanner-${{ steps.version_info.outputs.version }}.zip
           body: |
-            Video Scanner ${{ steps.version.outputs.version }}
+            Video Scanner ${{ steps.version_info.outputs.version }}
+
+            ### Release Notes
+            ${{ steps.version_info.outputs.tag_message }}
+
+            ### Changes
+            ${{ steps.version_info.outputs.changes }}
 
             ### Installation
             1. Download and extract ZIP
             2. Run `Launch_VideoScanner.bat`
             3. Drag & drop video files to analyze
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+            ### System Requirements
+            * Windows 10/11 64-bit
+            * NVIDIA GPU (optional)
 
       - name: Upload Development Build
         if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
         uses: actions/upload-artifact@v3
         with:
-          name: VideoScanner-${{ steps.version.outputs.version }}
-          path: VideoScanner-${{ steps.version.outputs.version }}.zip
+          name: VideoScanner-${{ steps.version_info.outputs.version }}
+          path: VideoScanner-${{ steps.version_info.outputs.version }}.zip
           retention-days: 7
