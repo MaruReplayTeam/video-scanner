@@ -159,6 +159,9 @@ jobs:
           # Run PyInstaller with spec file
           pyinstaller VideoScanner.spec
 
+      - name: Install 7-Zip
+        run: choco install 7zip.install -y
+
       - name: Create Release Package
         shell: pwsh
         run: |
@@ -182,8 +185,19 @@ jobs:
           )
           "@ | Set-Content "$packageDir\Run_VideoScanner.bat"
 
-          # Create ZIP
-          Compress-Archive -Path $packageDir\* -DestinationPath "$packageDir.zip" -Force
+          # Create ZIP using 7-Zip
+          $zipPath = "$packageDir.zip"
+          $7zPath = "C:\Program Files\7-Zip\7z.exe"
+
+          Write-Host "Creating ZIP archive using 7-Zip..."
+          & $7zPath a -tzip $zipPath "$packageDir\*"
+
+          if ($LASTEXITCODE -ne 0) {
+              Write-Error "Failed to create ZIP archive"
+              exit 1
+          }
+
+          Write-Host "ZIP archive created successfully"
 
       - name: Create Release
         if: startsWith(github.ref, 'refs/tags/v')
