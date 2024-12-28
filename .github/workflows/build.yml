@@ -74,22 +74,25 @@ jobs:
             '--name', 'VideoScanner',
             '--add-binary', 'C:\Windows\System32\msvcp140.dll;.',
             '--add-binary', 'C:\Windows\System32\vcruntime140.dll;.',
-            '--collect-all', 'torch',
-            '--collect-all', 'numpy',
-            '--collect-all', 'cv2',
-            '--collect-all', 'moviepy',
-            '--collect-all', 'colorama',
-            '--collect-all', 'tqdm',
+            '--hidden-import', 'torch',
+            '--hidden-import', 'torch.cuda',
+            '--hidden-import', 'torch.backends.cuda',
+            '--hidden-import', 'numpy',
+            '--hidden-import', 'numpy.core',
+            '--hidden-import', 'numpy.random',
+            '--hidden-import', 'cv2',
+            '--hidden-import', 'moviepy.editor',
             '--hidden-import', 'PIL',
             '--hidden-import', 'PIL._tkinter_finder',
             '--hidden-import', 'numpy.random.common',
             '--hidden-import', 'numpy.random.bounded_integers',
             '--hidden-import', 'numpy.random.entropy',
-            '--hidden-import', 'sklearn.utils._cython_blas',
-            '--hidden-import', 'sklearn.neighbors.typedefs',
-            '--hidden-import', 'sklearn.neighbors.quad_tree',
-            '--hidden-import', 'sklearn.tree._utils',
-            '--hidden-import', 'scipy.special.cython_special',
+            '--collect-submodules', 'torch',
+            '--collect-submodules', 'numpy',
+            '--collect-submodules', 'cv2',
+            '--collect-submodules', 'moviepy',
+            '--collect-submodules', 'colorama',
+            '--collect-submodules', 'tqdm',
             '--paths', (Get-Location).Path,
             '--additional-hooks-dir', 'hooks',
             '--exclude-module', 'tkinter',
@@ -98,43 +101,50 @@ jobs:
             'main.py'
           )
 
+          # Create hooks directory and torch hook
+          mkdir hooks -ErrorAction SilentlyContinue
+          @"
+          from PyInstaller.utils.hooks import collect_all, collect_submodules
+
+          # Collect all torch submodules
+          hiddenimports = collect_submodules('torch')
+          datas = []
+          binaries = []
+
+          # Add CUDA DLLs
+          import os
+          import glob
+
+          # Collect CUDA DLLs from torch installation
+          import torch
+          torch_path = os.path.dirname(torch.__file__)
+          cuda_dlls = glob.glob(os.path.join(torch_path, 'lib', '*.dll'))
+          for dll in cuda_dlls:
+              binaries.append((dll, '.'))
+
+          # Add additional torch data files
+          torch_libs = os.path.join(torch_path, 'lib')
+          if os.path.exists(torch_libs):
+              datas.append((torch_libs, 'torch/lib'))
+          "@ | Set-Content "hooks/hook-torch.py"
+
+          # Create numpy hook
+          @"
+          from PyInstaller.utils.hooks import collect_data_files, collect_submodules
+
+          hiddenimports = collect_submodules('numpy')
+          datas = collect_data_files('numpy')
+          "@ | Set-Content "hooks/hook-numpy.py"
+
           Write-Host "PyInstaller Arguments:"
           Write-Host ($PyInstallerArgs -join "`n")
-
+          
           & python -m PyInstaller $PyInstallerArgs
 
           if ($LASTEXITCODE -ne 0) {
               Write-Error "PyInstaller failed with exit code $LASTEXITCODE"
               exit $LASTEXITCODE
           }
-
-      - name: Create PyInstaller Hooks Directory
-        shell: pwsh
-        run: |
-          mkdir hooks
-          @"
-          from PyInstaller.utils.hooks import collect_all
-
-          # Collect torch
-          datas, binaries, hiddenimports = collect_all('torch')
-
-          # Add CUDA DLLs if available
-          import os
-          cuda_path = os.environ.get('CUDA_PATH')
-          if cuda_path:
-              cuda_dlls = [
-                  'cudart64_*.dll',
-                  'cublas64_*.dll',
-                  'cufft64_*.dll',
-                  'curand64_*.dll',
-                  'cusolver64_*.dll',
-                  'cusparse64_*.dll',
-              ]
-              for dll in cuda_dlls:
-                  dll_path = os.path.join(cuda_path, 'bin', dll)
-                  if os.path.exists(dll_path):
-                      binaries.append((dll_path, '.'))
-          "@ | Set-Content "hooks/hook-torch.py"
 
       - name: Create Release Package
         shell: pwsh
