@@ -7,7 +7,7 @@ def build_exe():
     current_dir = Path(__file__).parent.absolute()
     
     # Create icon from the first frame of video
-    icon_path = current_dir / "app_icon.ico"
+    icon_path = current_dir / "icon.ico"
     
     # Determine data files
     data_files = [
