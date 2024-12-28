@@ -67,105 +67,98 @@ jobs:
       - name: Build Executable
         shell: pwsh
         run: |
+          # Create runtime dependency collector
+          mkdir tools -ErrorAction SilentlyContinue
+          @"
+          import os
+          import shutil
+          import sys
+          from pathlib import Path
+
+          def collect_runtime_deps():
+              deps_dir = Path('runtime_deps')
+              deps_dir.mkdir(exist_ok=True)
+              
+              # Essential DLLs
+              system_dlls = [
+                  'msvcp140.dll',
+                  'vcruntime140.dll',
+                  'vcruntime140_1.dll',
+                  'concrt140.dll',
+              ]
+              
+              # Copy system DLLs
+              for dll in system_dlls:
+                  src = Path(r'C:\Windows\System32') / dll
+                  if src.exists():
+                      shutil.copy2(src, deps_dir)
+              
+              # Get CUDA DLLs from torch
+              import torch
+              torch_path = Path(torch.__file__).parent
+              cuda_dlls = torch_path.glob('lib/*.dll')
+              for dll in cuda_dlls:
+                  shutil.copy2(dll, deps_dir)
+              
+              # Get OpenCV DLLs
+              import cv2
+              cv2_path = Path(cv2.__file__).parent
+              cv2_dlls = cv2_path.glob('*.dll')
+              for dll in cv2_dlls:
+                  shutil.copy2(dll, deps_dir)
+              
+              return deps_dir
+
+          if __name__ == '__main__':
+              deps = collect_runtime_deps()
+              print(f'Collected dependencies in: {deps}')
+          "@ | Set-Content "tools/collect_deps.py"
+
+          # Collect runtime dependencies
+          python tools/collect_deps.py
+
+          # Build with collected dependencies
           $PyInstallerArgs = @(
             '--onefile',
             '--windowed',
             '--clean',
             '--name', 'VideoScanner',
-            '--add-binary', 'C:\Windows\System32\msvcp140.dll;.',
-            '--add-binary', 'C:\Windows\System32\vcruntime140.dll;.',
+            '--add-data', 'runtime_deps/*;.',
             '--hidden-import', 'torch',
-            '--hidden-import', 'torch.cuda',
-            '--hidden-import', 'torch.backends.cuda',
             '--hidden-import', 'numpy',
-            '--hidden-import', 'numpy.core',
-            '--hidden-import', 'numpy.random',
             '--hidden-import', 'cv2',
             '--hidden-import', 'moviepy.editor',
-            '--hidden-import', 'PIL',
-            '--hidden-import', 'PIL._tkinter_finder',
-            '--hidden-import', 'numpy.random.common',
-            '--hidden-import', 'numpy.random.bounded_integers',
-            '--hidden-import', 'numpy.random.entropy',
-            '--collect-submodules', 'torch',
-            '--collect-submodules', 'numpy',
-            '--collect-submodules', 'cv2',
-            '--collect-submodules', 'moviepy',
-            '--collect-submodules', 'colorama',
-            '--collect-submodules', 'tqdm',
+            '--hidden-import', 'colorama',
             '--paths', (Get-Location).Path,
-            '--additional-hooks-dir', 'hooks',
-            '--exclude-module', 'tkinter',
-            '--exclude-module', 'pandas',
             '--exclude-module', 'matplotlib',
+            '--exclude-module', 'pandas',
+            '--exclude-module', 'tkinter',
             'main.py'
           )
 
-          # Create hooks directory and torch hook
-          mkdir hooks -ErrorAction SilentlyContinue
-          @"
-          from PyInstaller.utils.hooks import collect_all, collect_submodules
-
-          # Collect all torch submodules
-          hiddenimports = collect_submodules('torch')
-          datas = []
-          binaries = []
-
-          # Add CUDA DLLs
-          import os
-          import glob
-
-          # Collect CUDA DLLs from torch installation
-          import torch
-          torch_path = os.path.dirname(torch.__file__)
-          cuda_dlls = glob.glob(os.path.join(torch_path, 'lib', '*.dll'))
-          for dll in cuda_dlls:
-              binaries.append((dll, '.'))
-
-          # Add additional torch data files
-          torch_libs = os.path.join(torch_path, 'lib')
-          if os.path.exists(torch_libs):
-              datas.append((torch_libs, 'torch/lib'))
-          "@ | Set-Content "hooks/hook-torch.py"
-
-          # Create numpy hook
-          @"
-          from PyInstaller.utils.hooks import collect_data_files, collect_submodules
-
-          hiddenimports = collect_submodules('numpy')
-          datas = collect_data_files('numpy')
-          "@ | Set-Content "hooks/hook-numpy.py"
-
-          Write-Host "PyInstaller Arguments:"
-          Write-Host ($PyInstallerArgs -join "`n")
-          
+          Write-Host "Building standalone executable..."
           & python -m PyInstaller $PyInstallerArgs
-
-          if ($LASTEXITCODE -ne 0) {
-              Write-Error "PyInstaller failed with exit code $LASTEXITCODE"
-              exit $LASTEXITCODE
-          }
 
       - name: Create Release Package
         shell: pwsh
         run: |
           $packageDir = "VideoScanner-${{ steps.version_info.outputs.version }}"
           New-Item -ItemType Directory -Path $packageDir
+          
+          # Copy executable and essential files
           Copy-Item "dist\VideoScanner.exe", "README.md" -Destination $packageDir
-
-          # Create enhanced launcher
+          
+          # Create minimal launcher
           @"
           @echo off
-          echo Starting Video Scanner...
-          echo GPU support will be automatically detected
+          echo Video Scanner - Running...
           start /wait VideoScanner.exe %*
           if errorlevel 1 (
-              echo.
-              echo An error occurred. Press any key to exit...
+              echo Error occurred. Press any key...
               pause >nul
           )
           "@ | Set-Content "$packageDir\Launch_VideoScanner.bat"
-
+          
           # Create ZIP
           Compress-Archive -Path $packageDir\* -DestinationPath "$packageDir.zip" -Force
 
