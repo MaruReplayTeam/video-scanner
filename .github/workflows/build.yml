@@ -90,15 +90,23 @@ jobs:
             '--hidden-import', 'sklearn.neighbors.quad_tree',
             '--hidden-import', 'sklearn.tree._utils',
             '--hidden-import', 'scipy.special.cython_special',
-            '--paths', $env:CD,
-            '--additional-hooks-dir', './hooks',
+            '--paths', (Get-Location).Path,
+            '--additional-hooks-dir', 'hooks',
             '--exclude-module', 'tkinter',
             '--exclude-module', 'pandas',
             '--exclude-module', 'matplotlib',
             'main.py'
           )
 
-          python -m PyInstaller $PyInstallerArgs
+          Write-Host "PyInstaller Arguments:"
+          Write-Host ($PyInstallerArgs -join "`n")
+
+          & python -m PyInstaller $PyInstallerArgs
+
+          if ($LASTEXITCODE -ne 0) {
+              Write-Error "PyInstaller failed with exit code $LASTEXITCODE"
+              exit $LASTEXITCODE
+          }
 
       - name: Create PyInstaller Hooks Directory
         shell: pwsh
