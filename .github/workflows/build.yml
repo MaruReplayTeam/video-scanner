@@ -65,33 +65,40 @@ jobs:
           echo "EOF" >> $env:GITHUB_OUTPUT
 
       - name: Build Executable
+        shell: pwsh
         run: |
-          python -m PyInstaller --onefile --windowed --clean ^
-            --name VideoScanner ^
-            --add-binary "C:\Windows\System32\msvcp140.dll;." ^
-            --add-binary "C:\Windows\System32\vcruntime140.dll;." ^
-            --collect-all torch ^
-            --collect-all numpy ^
-            --collect-all cv2 ^
-            --collect-all moviepy ^
-            --collect-all colorama ^
-            --collect-all tqdm ^
-            --hidden-import=PIL ^
-            --hidden-import=PIL._tkinter_finder ^
-            --hidden-import=numpy.random.common ^
-            --hidden-import=numpy.random.bounded_integers ^
-            --hidden-import=numpy.random.entropy ^
-            --hidden-import=sklearn.utils._cython_blas ^
-            --hidden-import=sklearn.neighbors.typedefs ^
-            --hidden-import=sklearn.neighbors.quad_tree ^
-            --hidden-import=sklearn.tree._utils ^
-            --hidden-import=scipy.special.cython_special ^
-            --paths "%CD%" ^
-            --additional-hooks-dir "./hooks" ^
-            --exclude-module tkinter ^
-            --exclude-module pandas ^
-            --exclude-module matplotlib ^
-            main.py
+          $PyInstallerArgs = @(
+            '--onefile',
+            '--windowed',
+            '--clean',
+            '--name', 'VideoScanner',
+            '--add-binary', 'C:\Windows\System32\msvcp140.dll;.',
+            '--add-binary', 'C:\Windows\System32\vcruntime140.dll;.',
+            '--collect-all', 'torch',
+            '--collect-all', 'numpy',
+            '--collect-all', 'cv2',
+            '--collect-all', 'moviepy',
+            '--collect-all', 'colorama',
+            '--collect-all', 'tqdm',
+            '--hidden-import', 'PIL',
+            '--hidden-import', 'PIL._tkinter_finder',
+            '--hidden-import', 'numpy.random.common',
+            '--hidden-import', 'numpy.random.bounded_integers',
+            '--hidden-import', 'numpy.random.entropy',
+            '--hidden-import', 'sklearn.utils._cython_blas',
+            '--hidden-import', 'sklearn.neighbors.typedefs',
+            '--hidden-import', 'sklearn.neighbors.quad_tree',
+            '--hidden-import', 'sklearn.tree._utils',
+            '--hidden-import', 'scipy.special.cython_special',
+            '--paths', $env:CD,
+            '--additional-hooks-dir', './hooks',
+            '--exclude-module', 'tkinter',
+            '--exclude-module', 'pandas',
+            '--exclude-module', 'matplotlib',
+            'main.py'
+          )
+
+          python -m PyInstaller $PyInstallerArgs
 
       - name: Create PyInstaller Hooks Directory
         shell: pwsh
